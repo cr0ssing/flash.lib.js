@@ -1,0 +1,32 @@
+{
+  "name": "flash.test.js",
+  "version": "0.0.1",
+  "description": "Demonstrate the use of IOTA flash channels",
+  "keywords": [
+    "iota",
+    "dlt",
+    "tangle",
+    "m2m",
+    "iot",
+    "flash-channel"
+  ],
+  "author": {
+    "name": "Robin Lamberti",
+    "email": "lamberti.robin@gmail.com"
+  },
+  "license": "ISC",
+  "main": "flash.js",
+  "scripts": {
+    "test": "cross-env DEBUG=flash mocha",
+    "web": "browserify flash.js --standalone Flash > dist/flash.web.js"
+  },
+  "dependencies": {
+    "async-iota": "^0.1.3",
+    "iota.flash.js": "github:cr0ssing/iota.flash.js"
+  },
+  "devDependencies": {
+    "browserify": "^16.2.2",
+    "cross-env": "^5.2.0",
+    "mocha": "^5.2.0"
+  }
+}

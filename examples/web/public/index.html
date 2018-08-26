@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="de">
+    <head>
+        <meta charset="utf-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+
+        <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+
+        <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js" integrity="sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49" crossorigin="anonymous"></script>
+        <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js" integrity="sha384-ChfqqxuZUCnJSK3+MXmPNIyE6ZbWh2IMqE241rYiqJxyMiZ6OW/JmZQ5stwEULTy" crossorigin="anonymous"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.1.1/socket.io.js"></script>
+        <script src="https://code.highcharts.com/highcharts.js"></script>
+        <script src="https://code.highcharts.com/modules/exporting.js"></script>
+        <script src="https://code.highcharts.com/modules/export-data.js"></script>
+        <script src="flash.web.js"></script>
+    </head>
+
+    <body>
+        <div id="container" style="min-width: 310px; height: 400px; margin: 0 auto"></div>
+        <button id="open" class="btn btn-primary disabled">Open channel</button>
+        <button id="close" class="btn disabled">Close channel</button>
+        <div id="output"></div>
+    </body>
+</html>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/6.4.4/babel.min.js"></script>
+<script type="text/javascript">
+    Highcharts.setOptions({
+        global: {
+            useUTC: false
+        }
+    });
+
+    const chart = Highcharts.chart('container', {
+        chart: {
+            type: 'spline',
+            animation: Highcharts.svg, // don't animate in old IE
+            marginRight: 10
+        },
+        title: {
+            text: 'Live random data'
+        },
+        xAxis: {
+            type: 'datetime',
+            tickPixelInterval: 150
+        },
+        yAxis: {
+            title: {
+                text: 'Value'
+            },
+            plotLines: [{
+                value: 0,
+                width: 1,
+                color: '#808080'
+            }]
+        },
+        tooltip: {
+            formatter: function () {
+                return '<b>' + this.series.name + '</b> ' + this.point.id + '<br/>' +
+                    Highcharts.dateFormat('%Y-%m-%d %H:%M:%S', this.x) + '<br/>' +
+                    Highcharts.numberFormat(this.y, 0);
+            }
+        },
+        legend: {
+            enabled: false
+        },
+        exporting: {
+            enabled: false
+        },
+        series: [{
+            name: 'Random data',
+            data: []
+        }]
+    });
+
+    $(document).ready(async function() {
+        const socket = io("http://localhost:3000")
+        $("#open").removeClass('disabled')
+        applyDefaultListeners()
+        console.log("Connected to server")
+
+        let state
+        const seed = "SEEDWITHIOTASINTESTNET"
+        const settlementAddress = "SETTLEMENTADDRESS"
+        const activateDepositing = false
+        
+        $('#open').click(() => {
+            console.log("Creating flash channel...")
+            $('#open').addClass('disabled')
+            state = new Flash(1, seed, settlementAddress, 2, 2, 6)
+            const digests = state.createDigests()
+
+            socket.emit('createFlash', {
+                settlement: state.settlement, 
+                digests, 
+                depth: state.depth, 
+                security: state.security,
+            }, ({digests: otherDigests, settlement, price, min, max}) => {
+                if (state.state == Flash.States.GENERATED_DIGESTS) {
+                    const allDigests = [otherDigests, digests]
+                    state.prepareChannel(allDigests, [settlement, state.settlement])
+
+                    const requested = 30 * price * 2
+                    console.log("Channel prepared. Request deposit...")
+                    socket.emit('requestDeposit', {value: requested}, async ({hash, value, error}) => {
+                        try {
+                            const deposit = activateDepositing ? await state.checkDeposit(hash) : value
+                            if (deposit != value && value < deposit) {
+                                console.log("Server deposited false amount into channel.")
+                            } else {
+                                console.log("Sending deposit...")
+                                const myHash = activateDepositing ? (await state.sendDeposit(requested))[0].bundle : ''
+                                state.updateDeposit([value, deposit])
+                                
+                                socket.emit('sentDeposit', {hash: myHash, value: requested}, success => {
+                                    if (success) {
+                                        console.log("Client set up!")
+                                        setupSocket(price, settlement)
+                                    }
+                                })
+                            }
+                        } catch(err) {
+                            console.error("Depositing failed", err)
+                        }
+                    })
+                }
+            })
+
+            
+        })
+
+        $('#close').click(() => {
+            console.log("Closing channel...")
+            $('#close').addClass('disabled')
+            let {bundles, signedBundles} = state.createCloseTransaction()
+            socket.emit('createdTransaction', {bundles, signedBundles, close: true})
+        })
+
+        let lastsUntil = -1
+        const amount = 5
+        let createTransaction
+        let price
+
+        function setupSocket(prize, settlement) {
+            price = prize
+            //ready to receive data
+            $("#close").removeClass('disabled')
+
+            createTransaction = async function (price, id) {
+                const fn = async () => {
+                    try {
+                        if (state.state == Flash.States.READY) {
+                            lastsUntil = id + amount
+                            console.log("Create transaction for samples until", lastsUntil)
+                            let {bundles, signedBundles} = await state.createTransaction(price * amount, settlement, createNewBranch)
+                            socket.emit('createdTransaction', {bundles, signedBundles, close: false})
+                        } else {
+                            console.error("New data can't be paid. State is", state.state)
+                        }
+                    } catch(err) {
+                        console.error("Transaction failed:", Flash.setErrorMessage(err))
+                    }
+                }
+                if (state.state == Flash.States.READY) {
+                    await fn()
+                } else {
+                    if (lastsUntil <= id) {
+                        console.log("Enqueue", id)
+                        toCreate.push(fn)
+                    } else {
+                        console.log(`Skip to pay for ${id} because transaction will cover this id.`)
+                    }
+                }
+            }
+
+            function createNewBranch(address, amount) {
+                console.log(`Creating ${amount} new multisigs...`)
+                const myDigests = state.createDigests(amount)
+                return new Promise((res, rej) => {
+                    socket.emit('createNewBranch', ({digests: myDigests, address: address.address}), (digests) => {
+                        try {
+                            state.buildNewBranch([digests, myDigests], address)
+                            console.log("Created new branch")
+                            res()
+                        } catch(err) {
+                            console.log("Building branch failed:", Flash.setErrorMessage(err))
+                            rej(err)
+                        }
+                    })
+                })
+            }
+
+            socket.on('createNewBranch', ({digests, address}, ack) => {
+                if (state.state == Flash.States.READY) {
+                    console.log("Creating new branch")
+                    const addressMultisig = multisig.getMultisig(state.flash.root, address)
+                    const myDigests = state.createDigests(digests.length)
+                    state.buildNewBranch([digests, myDigests], addressMultisig)
+                    ack(myDigests)
+                } else {
+                    console.log("Can't create new branch. State is", flash.state)
+                    ack(false)
+                }
+            })
+
+            const toCreate = []
+
+            socket.on('newData', async ({price, id}) => {
+                console.log("New data! id:", id)
+                await createTransaction(price, id)
+            })
+
+            socket.on('signedTransaction', async ({signedBundles, close}) => {
+                if (state.state == Flash.States.SIGNED_TRANSACTION) {
+                    state.applyTransaction(signedBundles)
+                    console.log("Applied transaction")
+                    if (!close) {
+                        if (toCreate.length > 0) {
+                            console.log("Catching up...")
+                            const fn = toCreate.shift()
+                            await fn()
+                        }
+                    } else {
+                        console.log("Closed channel")
+                        state.state = Flash.States.CLOSED
+                        if (activateDepositing) {
+                            console.log("Attach bundle...")
+                            const bundle = await state.attachCurrentBundle()
+                            console.log("Attached. Bundle hash:", bundle[0].bundle)
+                        }
+                        cleanup()
+                    }
+                } else {
+                    console.error("Transaction can't be applied. State is", state.state)
+                }
+            })
+        }
+
+        function cleanup() {
+            state = undefined
+            lastsUntil = -1
+            $('#open').removeClass('disabled')
+            socket.removeAllListeners()
+            applyDefaultListeners()
+        }
+
+        function applyDefaultListeners() {
+            socket.on('disconnect', () => {
+                console.log("Disconnected from server")
+                cleanup()
+            })
+
+            socket.on('data', async ({data: {x, y}, id}) => {
+                console.log("Add point ", id)
+                chart.series[0].addPoint({x, y, id}, true, chart.series[0].data.length > 20, true)
+                if (lastsUntil - id <= amount / 2.0 && state && state.state != Flash.States.CLOSED) {
+                    console.log(`Paymant lasts until ${lastsUntil}. Creating transaction in advance`)
+                    await createTransaction(price, lastsUntil)
+                }
+            })
+
+            socket.on('createFlash', function({settlement, digests, depth, security, price}, ack) {
+                if (!state) {
+                    console.log("Creating flash channel...")
+                    const twoSeed = "USERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSERTWOUSER"
+                    const settlementAddress = "USERTWO9ADDRESS9USERTWO9ADDRESS9USERTWO9ADDRESS9USERTWO9ADDRESS9USERTWO9ADDRESS9U"
+
+                    state = new Flash(1, twoSeed, settlementAddress, 2, security, depth)
+                    const myDigests = state.createDigests()
+                    const allDigests = [digests, myDigests]
+                    state.prepareChannel(allDigests, [settlement, state.settlement])
+
+                    //TODO dont hardcode
+                    state.updateDeposit([1000, 1000])
+                    
+                    console.log("Client set up!")
+                    ack({
+                        digests: myDigests,
+                        settlement: state.settlement
+                    })
+
+                    setupSocket(price)
+                } else {
+                    console.log("Client was already created")
+                    ack(false)
+                }
+            })
+        }
+    })
+</script>
