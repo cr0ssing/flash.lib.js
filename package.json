@@ -1,7 +1,7 @@
 {
-  "name": "flash.test.js",
+  "name": "flash.lib.js",
   "version": "0.0.1",
-  "description": "Demonstrate the use of IOTA flash channels",
+  "description": "Provide an easy to use library for IOTA flash channels",
   "keywords": [
     "iota",
     "dlt",
