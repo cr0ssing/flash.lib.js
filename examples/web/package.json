@@ -11,7 +11,7 @@
   "scripts": {},
   "dependencies": {
     "express": "^4.16.3",
-    "flash.test.js": "^0.0.1",
+    "flash.lib.js": "^0.0.1",
     "minimist": "^1.2.0",
     "socket.io": "^2.1.1"
   },

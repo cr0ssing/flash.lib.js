@@ -91,7 +91,7 @@
             console.log("Transaction Applied!")
             console.log("Deposit:", from.flash.deposit)
             console.log("Balances:", from.getBalances())
-            // console.log(prettyPrint(signedBundles))
+            // signedBundles.forEach(b => console.log(prettyPrint(b)))
         } catch(err) {
             console.error("Transaction failed:", Flash.setErrorMessage(err))
         }

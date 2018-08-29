@@ -1,4 +1,4 @@
-const Flash = require('flash.test.js')
+const Flash = require('flash.lib.js')
 
 class PaymentChannel {
     constructor(socket, onPayment, price, onClose) {
